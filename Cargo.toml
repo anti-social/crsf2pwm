@@ -1,0 +1,28 @@
+[package]
+name = "crsf2pwm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7.5"
+crsf = { git = "https://github.com/anti-social/crsf-rs.git", rev = "48bd253" }
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-rp = { version = "0.10.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl"] }
+embassy-sync = "0.8.0"
+embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"] }
+fixed = "1.29.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+pt-filter = { path = "pt-filter" }
+smart-leds = "0.4.0"
+
+[features]
+default = ["rp2040"]
+rp2040 = ["embassy-rp/rp2040"]
+rp2350 = ["embassy-rp/rp235xa"]
+
+[profile.debug-release]
+inherits = "release"
+debug = 2
