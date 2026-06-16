@@ -32,9 +32,7 @@ const LED_BRIGHTNESS: u8 = 64;
 static LAST_RC_PACKET: Watch<CriticalSectionRawMutex, (crsf::RcChannelsPacked, Instant), 2> = Watch::new();
 
 const PWM_MIN_VALUE: u16 = 988;
-const PWM_MIN_VALID_VALUE: u16 = 1000;
 const PWM_MAX_VALUE: u16 = 2012;
-const PWM_MAX_VALID_VALUE: u16 = 2000;
 const PWM_MID_VALUE: u16 = 1500;
 // TODO: Consider remembering values from the first crsf packet
 const PWM_FAILSAFE_VALUES: [u16; NUM_PWM_CHANNELS] = [
@@ -51,6 +49,9 @@ const RC_TO_PWM_SCALE_FACTOR: u32 = (PWM_MAX_VALUE - PWM_MIN_VALUE) as u32 * 1_0
     (crsf::RcChannelsPacked::CHANNEL_VALUE_MAX as u32 - crsf::RcChannelsPacked::CHANNEL_VALUE_MIN as u32);
 const RC_TO_PWM_OFFSET: u16 = 881;
 
+const EXT_PWM_MIN_CENTRAL_VALUE: u16 = 1490;
+const EXT_PWM_MAX_CENTRAL_VALUE: u16 = 1510;
+
 const FILTER_SAMPLE_MIN_FREQ: u16 = 25;
 const FILTER_SAMPLE_MAX_FREQ: u16 = 250;
 const FILTER_SAMPLE_DEFAULT_FREQ: u16 = 50;
@@ -60,7 +61,7 @@ fn resolve_ext_pwm(reading: Option<(u16, Instant)>, fallback: u16) -> u16 {
     reading
         .filter(|(v, t)| {
             t.elapsed() < EXT_PWM_SIGNAL_TIMEOUT
-                && (PWM_MIN_VALID_VALUE..=PWM_MAX_VALID_VALUE).contains(v)
+                && !(EXT_PWM_MIN_CENTRAL_VALUE..=EXT_PWM_MAX_CENTRAL_VALUE).contains(v)
         })
         .map(|(v, _)| v)
         .unwrap_or(fallback)
@@ -231,7 +232,6 @@ async fn control_pwms(
     loop {
         let result = with_timeout(EXT_PWM_POLL_INTERVAL, rc_packets_receiver.changed()).await;
         let ext_pwm_readings = [ext_pwm_0.current_value(), ext_pwm_1.current_value()];
-        defmt::info!("> {}", ext_pwm_readings[0].map(|v| v.0).unwrap_or(0));
 
         match result {
             Ok((rc_channels, rc_timestamp)) => {
