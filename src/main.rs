@@ -18,16 +18,23 @@ use smart_leds::{brightness, colors, gamma, RGB8};
 
 use pt_filter::Pt2Filter;
 
+mod pwm_input;
+use pwm_input::{PwmInput, PwmInputProgram};
+
 const CRSF_RX_BAUDRATE: u32 = 420_000;
 const CRSF_RESET_TIMEOUT: Duration = Duration::from_millis(10);
 const NUM_PWM_CHANNELS: usize = 8;
 const RX_LOSS_TIMEOUT: Duration = Duration::from_millis(100);
+const EXT_PWM_SIGNAL_TIMEOUT: Duration = Duration::from_millis(50);
+const EXT_PWM_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const LED_BRIGHTNESS: u8 = 64;
 
 static LAST_RC_PACKET: Watch<CriticalSectionRawMutex, (crsf::RcChannelsPacked, Instant), 2> = Watch::new();
 
-const PWM_MAX_VALUE: u16 = 2012;
 const PWM_MIN_VALUE: u16 = 988;
+const PWM_MIN_VALID_VALUE: u16 = 1000;
+const PWM_MAX_VALUE: u16 = 2012;
+const PWM_MAX_VALID_VALUE: u16 = 2000;
 const PWM_MID_VALUE: u16 = 1500;
 // TODO: Consider remembering values from the first crsf packet
 const PWM_FAILSAFE_VALUES: [u16; NUM_PWM_CHANNELS] = [
@@ -48,6 +55,16 @@ const FILTER_SAMPLE_MIN_FREQ: u16 = 25;
 const FILTER_SAMPLE_MAX_FREQ: u16 = 250;
 const FILTER_SAMPLE_DEFAULT_FREQ: u16 = 50;
 const FILTER_CUT_FREQ: u16 = 5;
+
+fn resolve_ext_pwm(reading: Option<(u16, Instant)>, fallback: u16) -> u16 {
+    reading
+        .filter(|(v, t)| {
+            t.elapsed() < EXT_PWM_SIGNAL_TIMEOUT
+                && (PWM_MIN_VALID_VALUE..=PWM_MAX_VALID_VALUE).contains(v)
+        })
+        .map(|(v, _)| v)
+        .unwrap_or(fallback)
+}
 
 fn map_rc_channel_to_pwm(rc_value: u16) -> u16 {
     // conversion from RC value to PWM
@@ -82,12 +99,16 @@ async fn main(spawner: Spawner) {
     let mut watchdog = Watchdog::new(p.WATCHDOG);
     watchdog.start(Duration::from_millis(1000));
 
-    let Pio { mut common, sm0, .. } = Pio::new(p.PIO0, Irqs);
+    let Pio { mut common, sm0, sm1, sm2, .. } = Pio::new(p.PIO0, Irqs);
     let program = PioWs2812Program::new(&mut common);
     let mut ws2812: Ws2812 = PioWs2812::with_color_order(
         &mut common, sm0, p.DMA_CH2, Irqs, p.PIN_16, &program
     );
     set_led_color(&mut ws2812, colors::BLUE).await;
+
+    let pwm_input_program = PwmInputProgram::new(&mut common);
+    let ext_pwm_0 = PwmInput::new(&mut common, sm1, p.PIN_14, &pwm_input_program);
+    let ext_pwm_1 = PwmInput::new(&mut common, sm2, p.PIN_15, &pwm_input_program);
 
     let crsf_uart_config = {
         let mut config = uart::Config::default();
@@ -144,7 +165,7 @@ async fn main(spawner: Spawner) {
         read_rx_to_fc_packets(in_uart_rx).unwrap()
     );
     spawner.spawn(
-        control_pwms(pwms, ws2812).unwrap()
+        control_pwms(pwms, ws2812, ext_pwm_0, ext_pwm_1).unwrap()
     );
 
     loop {
@@ -190,6 +211,8 @@ async fn read_rx_to_fc_packets(
 async fn control_pwms(
     mut pwms: [Option<PwmOutput<'static>>; NUM_PWM_CHANNELS],
     mut ws2812: Ws2812,
+    mut ext_pwm_0: PwmInput<'static, PIO0, 1>,
+    mut ext_pwm_1: PwmInput<'static, PIO0, 2>,
 ) {
     let mut rc_packets_receiver = LAST_RC_PACKET.receiver().unwrap();
     let mut is_rx_loss = true;
@@ -203,21 +226,29 @@ async fn control_pwms(
 
     let mut freq_measurement_start_at: Option<Instant> = None;
     let mut freq_measurement_received_packets = 0;
+    let mut last_crsf_at: Option<Instant> = None;
 
     loop {
-        match with_timeout(RX_LOSS_TIMEOUT, rc_packets_receiver.changed()).await {
+        let result = with_timeout(EXT_PWM_POLL_INTERVAL, rc_packets_receiver.changed()).await;
+        let ext_pwm_readings = [ext_pwm_0.current_value(), ext_pwm_1.current_value()];
+        defmt::info!("> {}", ext_pwm_readings[0].map(|v| v.0).unwrap_or(0));
+
+        match result {
             Ok((rc_channels, rc_timestamp)) => {
+                last_crsf_at = Some(rc_timestamp);
+
                 for i in 0..NUM_PWM_CHANNELS {
-                    let pwm_value = map_rc_channel_to_pwm(rc_channels.0[i]);
-                    let Some(pwm) = &mut pwms[i] else {
-                        continue;
-                    };
-                    if (PWM_MIN_VALUE..=PWM_MAX_VALUE).contains(&pwm_value) {
-                        let pwm_value = filtered_pwm_values[i]
-                            .update(pwm_value.to_fixed())
+                    let crsf_pwm = map_rc_channel_to_pwm(rc_channels.0[i]);
+                    let Some(pwm) = &mut pwms[i] else { continue };
+                    if (PWM_MIN_VALUE..=PWM_MAX_VALUE).contains(&crsf_pwm) {
+                        // Always feed CRSF through the filter so it stays warm
+                        // even while external PWM is overriding the output.
+                        let filtered = filtered_pwm_values[i]
+                            .update(crsf_pwm.to_fixed())
                             .to_num::<i32>()
                             .clamp(PWM_MIN_VALUE as i32, PWM_MAX_VALUE as i32) as u16;
-                        let _ = pwm.set_duty_cycle(pwm_value);
+                        let ext = ext_pwm_readings.get(i).copied().flatten();
+                        let _ = pwm.set_duty_cycle(resolve_ext_pwm(ext, filtered));
                     }
                 }
 
@@ -253,21 +284,35 @@ async fn control_pwms(
                 }
             }
             Err(_) => {
-                for i in 0..NUM_PWM_CHANNELS {
-                    let Some(pwm) = &mut pwms[i] else {
-                        continue;
-                    };
-                    let _ = pwm.set_duty_cycle(PWM_FAILSAFE_VALUES[i]);
-                }
+                let rx_loss_now = last_crsf_at
+                    .map_or(true, |t| t.elapsed() >= RX_LOSS_TIMEOUT);
 
-                freq_measurement_start_at = None;
-                freq_measurement_received_packets = 0;
+                if rx_loss_now {
+                    for i in 0..NUM_PWM_CHANNELS {
+                        let Some(pwm) = &mut pwms[i] else { continue };
+                        let ext = ext_pwm_readings.get(i).copied().flatten();
+                        let _ = pwm.set_duty_cycle(resolve_ext_pwm(ext, PWM_FAILSAFE_VALUES[i]));
+                    }
 
-                if !is_rx_loss {
-                    set_led_color(&mut ws2812, colors::RED).await;
-                    is_rx_loss = true;
-                    for filtered_pwm_value in &mut filtered_pwm_values {
-                        filtered_pwm_value.reset();
+                    if !is_rx_loss {
+                        freq_measurement_start_at = None;
+                        freq_measurement_received_packets = 0;
+                        set_led_color(&mut ws2812, colors::RED).await;
+                        is_rx_loss = true;
+                        for filtered_pwm_value in &mut filtered_pwm_values {
+                            filtered_pwm_value.reset();
+                        }
+                    }
+                } else {
+                    // CRSF is active but no new packet in EXT_PWM_POLL_INTERVAL;
+                    // keep ext PWM channels updated at poll rate using last filter state.
+                    for i in 0..2 {
+                        let Some(pwm) = &mut pwms[i] else { continue };
+                        let ext = ext_pwm_readings.get(i).copied().flatten();
+                        let last_filtered = filtered_pwm_values[i].state()
+                            .to_num::<i32>()
+                            .clamp(PWM_MIN_VALUE as i32, PWM_MAX_VALUE as i32) as u16;
+                        let _ = pwm.set_duty_cycle(resolve_ext_pwm(ext, last_filtered));
                     }
                 }
             }
