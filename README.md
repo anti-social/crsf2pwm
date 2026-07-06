@@ -57,6 +57,8 @@ Values in `src/main.rs`:
 | `RX_LOSS_TIMEOUT` | 100 ms | RX signal lost threshold |
 | `FILTER_CUT_FREQ` | 5 Hz | Filter cutoff |
 | `FILTER_SAMPLE_DEFAULT_FREQ` | 50 Hz | Filter sample rate default |
+| `MOTOR_SOFT_START_DELAY` | 1000 ms | Soft start delay for motors (first 2 channels) |
+| `MOTOR_SOFT_STOP_DELAY` | 1000 ms | Soft stop delay for motors (first 2 channels) |
 
 ## License
 

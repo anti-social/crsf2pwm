@@ -59,6 +59,9 @@ const FILTER_SAMPLE_MAX_FREQ: u16 = 250;
 const FILTER_SAMPLE_DEFAULT_FREQ: u16 = 50;
 const FILTER_CUT_FREQ: u16 = 5;
 
+const MOTOR_SOFT_START_DELAY: Duration = Duration::from_millis(1000);
+const MOTOR_SOFT_STOP_DELAY: Duration = Duration::from_millis(1000);
+
 fn is_ext_pwm_active(reading: &(u16, Instant)) -> bool {
     let (v, t) = reading;
     t.elapsed() < EXT_PWM_SIGNAL_TIMEOUT
@@ -245,8 +248,8 @@ async fn control_pwms(
         .map(|v| LinearRamp::new(
             LinearRampConfig {
                 span: (PWM_MAX_VALUE - PWM_MIN_VALUE).to_fixed(),
-                ramp_up_millis: 1000,
-                ramp_down_millis: 1000,
+                ramp_up_millis: MOTOR_SOFT_START_DELAY.as_millis(),
+                ramp_down_millis: MOTOR_SOFT_STOP_DELAY.as_millis(),
                 first_interval_millis: EXT_PWM_POLL_INTERVAL.as_millis(),
             },
             v.to_fixed(),
