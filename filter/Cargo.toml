@@ -1,7 +1,11 @@
 [package]
-name = "pt-filter"
+name = "filter"
 version = "0.1.0"
 edition = "2024"
+
+[features]
+embassy = []
+std = []
 
 [dependencies]
 fixed = "1.29.0"

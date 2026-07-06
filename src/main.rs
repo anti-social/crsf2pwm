@@ -16,7 +16,7 @@ use fixed::traits::ToFixed;
 use {defmt_rtt as _, panic_probe as _};
 use smart_leds::{brightness, colors, gamma, RGB8};
 
-use pt_filter::Pt2Filter;
+use filter::{LinearRamp, LinearRampConfig, Pt2Filter};
 
 mod pwm_input;
 use pwm_input::{PwmInput, PwmInputProgram};
@@ -240,6 +240,17 @@ async fn control_pwms(
     let mut is_rx_loss = true;
     let mut is_ext_pwm = false;
 
+    let mut ramp_values: [LinearRamp<FilteredPwmValue>; 2] = 
+        [PWM_FAILSAFE_VALUES[0], PWM_FAILSAFE_VALUES[1]]
+        .map(|v| LinearRamp::new(
+            LinearRampConfig {
+                span: (PWM_MAX_VALUE - PWM_MIN_VALUE).to_fixed(),
+                ramp_up_millis: 1000,
+                ramp_down_millis: 1000,
+                first_interval_millis: EXT_PWM_POLL_INTERVAL.as_millis(),
+            },
+            v.to_fixed(),
+        ));
     let mut filter_sample_freq = FILTER_SAMPLE_DEFAULT_FREQ;
     let mut filtered_pwm_values: [Pt2Filter<FilteredPwmValue>; NUM_PWM_CHANNELS] =
         PWM_FAILSAFE_VALUES
@@ -251,7 +262,8 @@ async fn control_pwms(
     let mut freq_measurement_received_packets = 0;
     let mut last_crsf_at: Option<Instant> = None;
 
-    let mut values = PWM_FAILSAFE_VALUES.clone();
+    let mut crsf_values = PWM_FAILSAFE_VALUES.clone();
+    let mut filtered_values = PWM_FAILSAFE_VALUES.clone();
 
     loop {
         let result = with_timeout(EXT_PWM_POLL_INTERVAL, rc_packets_receiver.changed()).await;
@@ -275,14 +287,7 @@ async fn control_pwms(
                 for i in 0..NUM_PWM_CHANNELS {
                     let crsf_pwm = map_rc_channel_to_pwm(rc_channels.0[i]);
                     if (PWM_MIN_VALUE..=PWM_MAX_VALUE).contains(&crsf_pwm) {
-                        // Always feed CRSF through the filter so it stays warm
-                        // even while external PWM is overriding the output.
-                        let filtered = filtered_pwm_values[i]
-                            .update(crsf_pwm.to_fixed())
-                            .to_num::<i32>()
-                            .clamp(PWM_MIN_VALUE as i32, PWM_MAX_VALUE as i32) as u16;
-                        let ext = ext_pwm_readings.get(i).copied().flatten();
-                        values[i] = resolve_ext_pwm(&ext, filtered);
+                        crsf_values[i] = crsf_pwm;
                     }
                 }
 
@@ -323,8 +328,7 @@ async fn control_pwms(
 
                 if rx_loss_now {
                     for i in 0..NUM_PWM_CHANNELS {
-                        let ext = ext_pwm_readings.get(i).copied().flatten();
-                        values[i] = resolve_ext_pwm(&ext, PWM_FAILSAFE_VALUES[i]);
+                        crsf_values[i] = PWM_FAILSAFE_VALUES[i];
                     }
 
                     if !is_rx_loss {
@@ -336,21 +340,27 @@ async fn control_pwms(
                             filtered_pwm_value.reset();
                         }
                     }
-                } else {
-                    // CRSF is active but no new packet in EXT_PWM_POLL_INTERVAL;
-                    // keep ext PWM channels updated at poll rate using last filter state.
-                    for i in 0..2 {
-                        let ext = ext_pwm_readings.get(i).copied().flatten();
-                        let last_filtered = filtered_pwm_values[i].state()
-                            .to_num::<i32>()
-                            .clamp(PWM_MIN_VALUE as i32, PWM_MAX_VALUE as i32) as u16;
-                        values[i] = resolve_ext_pwm(&ext, last_filtered);
-                    }
                 }
             }
         }
 
-        update_pwms(&mut pwm_slices, &values).await;
+        let dt_millis = Instant::now().as_millis();
+        for (i, crsf_value) in crsf_values.iter().enumerate() {
+            let ext_pwm_value = ext_pwm_readings.get(i).copied().flatten();
+            let pwm_value = resolve_ext_pwm(&ext_pwm_value, *crsf_value).to_fixed();
+            let pwm_value = if let Some(ramp_value) = ramp_values.get_mut(i) {
+                ramp_value.update(pwm_value, dt_millis)
+            } else {
+                pwm_value
+            };
+            let pwm_value = filtered_pwm_values[i]
+                .update(pwm_value)
+                .to_num::<i32>()
+                .clamp(PWM_MIN_VALUE as i32, PWM_MAX_VALUE as i32) as u16;
+            filtered_values[i] = pwm_value;
+        }
+
+        update_pwms(&mut pwm_slices, &filtered_values).await;
     }
 }
 
