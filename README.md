@@ -17,9 +17,9 @@ This firmware reads CRSF RC channel packets from an ExpressLRS receiver over UAR
 
 | Pin | Function |
 |-----|----------|
+| GPIO 0–7 | PWM outputs (8 channels) |
 | GPIO 12 | CRSF RX (UART0 TX) |
 | GPIO 13 | (UART0 RX, unused) |
-| GPIO 0–7 | PWM outputs (8 channels) |
 | GPIO 14 | External PWM input ch0 |
 | GPIO 15 | External PWM input ch1 |
 | GPIO 16 | WS2812 LED |
@@ -54,10 +54,6 @@ Values in `src/main.rs`:
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `PWM_MIN_VALUE` | 988 µs | PWM minimum |
-| `PWM_MAX_VALUE` | 2012 µs | PWM maximum |
-| `PWM_MID_VALUE` | 1500 µs | PWM center |
-| `CRSF_RX_BAUDRATE` | 420000 | CRSF serial speed |
 | `RX_LOSS_TIMEOUT` | 100 ms | RX signal lost threshold |
 | `FILTER_CUT_FREQ` | 5 Hz | Filter cutoff |
 | `FILTER_SAMPLE_DEFAULT_FREQ` | 50 Hz | Filter sample rate default |
