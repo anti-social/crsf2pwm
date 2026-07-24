@@ -3,21 +3,26 @@
 
 use embassy_executor::Spawner;
 use embassy_rp::dma;
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, PIO0, UART0};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, PIO0, PIO1, UART0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::pio_programs::ws2812::{Grb, PioWs2812, PioWs2812Program};
 use embassy_rp::pwm::{Config, Pwm, PwmBatch, PwmOutput, SetDutyCycle};
-use embassy_rp::uart::{self, Uart, UartRx};
+use embassy_rp::uart::{self, Uart, UartRx, UartTx};
 use embassy_rp::watchdog::Watchdog;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use fixed::traits::ToFixed;
-use {defmt_rtt as _, panic_probe as _};
+use heapless::Vec;
 use smart_leds::{brightness, colors, gamma, RGB8};
+use {defmt_rtt as _, panic_probe as _};
+
+use embassy_rp::pio_programs::onewire::{PioOneWire, PioOneWireProgram};
 
 use filter::{LinearRamp, LinearRampConfig, Pt2Filter};
 
+mod temp;
+use temp::Ds18b20;
 mod pwm_input;
 use pwm_input::{PwmInput, PwmInputProgram};
 
@@ -28,6 +33,7 @@ const RX_LOSS_TIMEOUT: Duration = Duration::from_millis(100);
 const EXT_PWM_SIGNAL_TIMEOUT: Duration = Duration::from_millis(50);
 const EXT_PWM_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const LED_BRIGHTNESS: u8 = 64;
+const TEMPERATURE_MEASUREMENT_INTERVAL: Duration = Duration::from_millis(1000);
 
 static LAST_RC_PACKET: Watch<CriticalSectionRawMutex, (crsf::RcChannelsPacked, Instant), 1> = Watch::new();
 static CRSF_STATUS: Watch<CriticalSectionRawMutex, Status, 1> = Watch::new();
@@ -100,6 +106,7 @@ enum Status {
 
 embassy_rp::bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
+    PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
     UART0_IRQ => uart::InterruptHandler<UART0>;
     // UART1_IRQ => uart::InterruptHandler<UART1>;
     DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>, dma::InterruptHandler<DMA_CH1>, dma::InterruptHandler<DMA_CH2>;
@@ -139,7 +146,7 @@ async fn main(spawner: Spawner) {
         p.DMA_CH1,
         crsf_uart_config,
     );
-    let (mut _in_uart_tx, in_uart_rx) = input_uart.split();
+    let (in_uart_tx, in_uart_rx) = input_uart.split();
 
     // let output_uart = Uart::new(
     //     p.UART1,
@@ -182,6 +189,10 @@ async fn main(spawner: Spawner) {
     });
     let pwm_slices = [pwm_slice_0, pwm_slice_1, pwm_slice_2, pwm_slice_3];
 
+    let Pio { mut common, sm0, .. } = Pio::new(p.PIO1, Irqs);
+    let onewire_prg = PioOneWireProgram::new(&mut common);
+    let onewire = PioOneWire::new(&mut common, sm0, p.PIN_29, &onewire_prg);
+
     spawner.spawn(
         read_rx_to_fc_packets(in_uart_rx).unwrap()
     );
@@ -190,6 +201,9 @@ async fn main(spawner: Spawner) {
     );
     spawner.spawn(
         status_led(ws2812).unwrap()
+    );
+    spawner.spawn(
+        monitor_temperatures(onewire, in_uart_tx).unwrap()
     );
 
     loop {
@@ -385,6 +399,33 @@ async fn status_led(mut ws2812: Ws2812) {
             Timer::after_millis(250).await;
         } else {
             Timer::after_millis(500).await;
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn monitor_temperatures(
+    onewire: PioOneWire<'static, PIO1, 0>,
+    mut uart_tx: UartTx<'static, uart::Async>
+) {
+    let mut temp_sensors = Ds18b20::<_, _, 4>::new(onewire).await;
+
+    loop {
+        let start = Instant::now();
+        let temps = temp_sensors.read_temperatures().await;
+        if !temps.is_empty() {
+            let temps_data = temps.iter().map(|t| (t * 10).to_num()).collect::<Vec<i16, 4>>();
+            if let Ok(temp_packet) = uf_crsf::packets::Temp::new(0, &temps_data) {
+                let mut buf = [0; uf_crsf::constants::CRSF_MAX_PACKET_SIZE];
+                if let Ok(n) = uf_crsf::packets::write_packet_to_buffer(&mut buf, uf_crsf::PacketAddress::FlightController, &temp_packet) {
+                    let _ = uart_tx.write(&buf[..n]).await;
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed < TEMPERATURE_MEASUREMENT_INTERVAL {
+            Timer::after(TEMPERATURE_MEASUREMENT_INTERVAL - elapsed).await;
         }
     }
 }
