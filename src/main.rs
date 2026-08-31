@@ -3,6 +3,7 @@
 
 use embassy_executor::Spawner;
 use embassy_rp::dma;
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, PIO0, PIO1, UART0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::pio_programs::ws2812::{Grb, PioWs2812, PioWs2812Program};
@@ -28,7 +29,8 @@ use pwm_input::{PwmInput, PwmInputProgram};
 
 const CRSF_RX_BAUDRATE: u32 = 420_000;
 const CRSF_RESET_TIMEOUT: Duration = Duration::from_millis(10);
-const NUM_PWM_CHANNELS: usize = 8;
+const NUM_PWM_CHANNELS: usize = 6;
+const NUM_OUTPUT_CHANNELS: usize = 4;
 const RX_LOSS_TIMEOUT: Duration = Duration::from_millis(100);
 const EXT_PWM_SIGNAL_TIMEOUT: Duration = Duration::from_millis(50);
 const EXT_PWM_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -43,9 +45,11 @@ const PWM_MIN_VALUE: u16 = 988;
 const PWM_MAX_VALUE: u16 = 2012;
 const PWM_MID_VALUE: u16 = 1500;
 // TODO: Consider remembering values from the first crsf packet
-const PWM_FAILSAFE_VALUES: [u16; NUM_PWM_CHANNELS] = [
+const PWM_FAILSAFE_VALUES: [u16; NUM_PWM_CHANNELS + NUM_OUTPUT_CHANNELS] = [
     PWM_MID_VALUE,
     PWM_MID_VALUE,
+    PWM_MIN_VALUE,
+    PWM_MIN_VALUE,
     PWM_MIN_VALUE,
     PWM_MIN_VALUE,
     PWM_MIN_VALUE,
@@ -139,8 +143,8 @@ async fn main(spawner: Spawner) {
     };
     let input_uart = Uart::new(
         p.UART0,
-        p.PIN_12,
-        p.PIN_13,
+        p.PIN_12, // tx
+        p.PIN_13, // rx
         Irqs,
         p.DMA_CH0,
         p.DMA_CH1,
@@ -178,16 +182,19 @@ async fn main(spawner: Spawner) {
     let pwm_slice_2 = Pwm::new_output_ab(
         p.PWM_SLICE2, p.PIN_4, p.PIN_5, pwm_config.clone()
     );
-    let pwm_slice_3 = Pwm::new_output_ab(
-        p.PWM_SLICE3, p.PIN_6, p.PIN_7, pwm_config.clone()
-    );
     PwmBatch::set_enabled(true, |batch| {
         batch.enable(&pwm_slice_0);
         batch.enable(&pwm_slice_1);
         batch.enable(&pwm_slice_2);
-        batch.enable(&pwm_slice_3);
     });
-    let pwm_slices = [pwm_slice_0, pwm_slice_1, pwm_slice_2, pwm_slice_3];
+    let pwm_slices = [pwm_slice_0, pwm_slice_1, pwm_slice_2];
+
+    let outputs = [
+        Output::new(p.PIN_6, Level::Low),
+        Output::new(p.PIN_7, Level::Low),
+        Output::new(p.PIN_8, Level::Low),
+        Output::new(p.PIN_9, Level::Low),
+    ];
 
     let Pio { mut common, sm0, .. } = Pio::new(p.PIO1, Irqs);
     let onewire_prg = PioOneWireProgram::new(&mut common);
@@ -197,7 +204,12 @@ async fn main(spawner: Spawner) {
         read_rx_to_fc_packets(in_uart_rx).unwrap()
     );
     spawner.spawn(
-        control_pwms(pwm_slices, ext_pwm_0, ext_pwm_1).unwrap()
+        control_pwms(
+            pwm_slices,
+            ext_pwm_0,
+            ext_pwm_1,
+            outputs,
+        ).unwrap()
     );
     spawner.spawn(
         status_led(ws2812).unwrap()
@@ -250,6 +262,7 @@ async fn control_pwms(
     mut pwm_slices: [Pwm<'static>; NUM_PWM_CHANNELS / 2],
     mut ext_pwm_0: PwmInput<'static, PIO0, 1>,
     mut ext_pwm_1: PwmInput<'static, PIO0, 2>,
+    mut outputs: [Output<'static>; NUM_OUTPUT_CHANNELS],
 ) {
     let mut rc_packets_receiver = LAST_RC_PACKET.receiver().unwrap();
     let crsf_status_sender = CRSF_STATUS.sender();
@@ -269,7 +282,7 @@ async fn control_pwms(
             v.to_fixed(),
         ));
     let mut filter_sample_freq = FILTER_SAMPLE_DEFAULT_FREQ;
-    let mut filtered_pwm_values: [Pt2Filter<FilteredPwmValue>; NUM_PWM_CHANNELS] =
+    let mut filtered_pwm_values: [Pt2Filter<FilteredPwmValue>; NUM_PWM_CHANNELS + NUM_OUTPUT_CHANNELS] =
         PWM_FAILSAFE_VALUES
         .map(|v| Pt2Filter::with_initial_state(
             FILTER_CUT_FREQ.to_fixed(), filter_sample_freq.to_fixed(), v.to_fixed()
@@ -378,6 +391,8 @@ async fn control_pwms(
         }
 
         update_pwms(&mut pwm_slices, &filtered_values).await;
+
+        update_outputs(&mut outputs, &filtered_values);
     }
 }
 
@@ -432,7 +447,7 @@ async fn monitor_temperatures(
 
 async fn update_pwms(
     pwm_slices: &mut [Pwm<'static>; NUM_PWM_CHANNELS / 2],
-    values: &[u16; NUM_PWM_CHANNELS],
+    values: &[u16; NUM_PWM_CHANNELS + NUM_OUTPUT_CHANNELS],
 ) {
     // Synchronize update to prevent double-pulse glitches
     if pwm_slices[0].counter() < PWM_MAX_VALUE {
@@ -443,6 +458,23 @@ async fn update_pwms(
         let (mut pwm_0, mut pwm_1) = pwm_slice.split_by_ref();
         set_pwm_duty_cycle(&mut pwm_0, values[pwm_slice_ix]);
         set_pwm_duty_cycle(&mut pwm_1, values[pwm_slice_ix + 1]);
+    }
+}
+
+fn update_outputs(
+    outputs: &mut [Output<'static>; NUM_OUTPUT_CHANNELS],
+    values: &[u16; NUM_PWM_CHANNELS + NUM_OUTPUT_CHANNELS],
+) {
+    for (output_ix, output) in outputs.iter_mut().enumerate() {
+        let value = values[NUM_PWM_CHANNELS + output_ix];
+        let level = if value <= 1990 {
+            Level::Low
+        } else {
+            Level::High
+        };
+        if level != output.get_output_level() {
+            output.set_level(level);
+        }
     }
 }
 
