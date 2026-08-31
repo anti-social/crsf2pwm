@@ -22,7 +22,7 @@ heapless = "0.9.3"
 uf-crsf = { version = "0.6.1", features = ["defmt"] }
 
 [features]
-default = ["rp2040"]
+default = []
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 
