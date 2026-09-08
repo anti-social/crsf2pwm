@@ -61,6 +61,8 @@ const RC_TO_PWM_SCALE_FACTOR: u32 = (PWM_MAX_VALUE - PWM_MIN_VALUE) as u32 * 1_0
     (crsf::RcChannelsPacked::CHANNEL_VALUE_MAX as u32 - crsf::RcChannelsPacked::CHANNEL_VALUE_MIN as u32);
 const RC_TO_PWM_OFFSET: u16 = 881;
 
+const OUTPUT_THRESHOLD_VALUE: u16 = 1900;
+
 const EXT_PWM_MIN_CENTRAL_VALUE: u16 = 1490;
 const EXT_PWM_MAX_CENTRAL_VALUE: u16 = 1510;
 
@@ -151,17 +153,6 @@ async fn main(spawner: Spawner) {
         crsf_uart_config,
     );
     let (in_uart_tx, in_uart_rx) = input_uart.split();
-
-    // let output_uart = Uart::new(
-    //     p.UART1,
-    //     p.PIN_8,
-    //     p.PIN_9,
-    //     Irqs,
-    //     p.DMA_CH3,
-    //     p.DMA_CH4,
-    //     crsf_uart_config,
-    // );
-    // let (mut out_uart_tx, out_uart_rx) = output_uart.split();
 
     let mut pwm_config = Config::default();
     // 125 MHz / 125 = 1 MHz (1 us per tick)
@@ -467,7 +458,7 @@ fn update_outputs(
 ) {
     for (output_ix, output) in outputs.iter_mut().enumerate() {
         let value = values[NUM_PWM_CHANNELS + output_ix];
-        let level = if value <= 1990 {
+        let level = if value <= OUTPUT_THRESHOLD_VALUE {
             Level::Low
         } else {
             Level::High

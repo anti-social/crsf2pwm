@@ -6,7 +6,8 @@ CRSF (CrossFire System) to PWM signal converter for RC models, running on Raspbe
 
 This firmware reads CRSF RC channel packets from an ExpressLRS receiver over UART and outputs them as standard PWM servo signals on 8 channels. It supports:
 
-- **8 PWM channels** (4 PWM slices, dual-output each)
+- **6 PWM channels** (3 PWM slices, dual-output each)
+- **4 outputs** - digital outputs, high for channel values greater or equal 1900 
 - **External PWM passthrough** — channels 0 and 1 can proxy external PWM signals on GPIO 14/15, ignoring central-range values (1490–1510 µs)
 - **Soft start ramps** with configurable up/down rates to avoid servo/ESC glitches on boot
 - **2nd-order low-pass filter** (PT2) with auto-detection of CRSF packet rate as sample frequency
