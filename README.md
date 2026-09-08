@@ -17,9 +17,10 @@ This firmware reads CRSF RC channel packets from an ExpressLRS receiver over UAR
 
 | Pin | Function |
 |-----|----------|
-| GPIO 0–7 | PWM outputs (8 channels) |
+| GPIO 0–5 | PWM outputs (6 channels) |
+| GPIO 6–9 | Outputs (4 channels) |
 | GPIO 12 | CRSF RX (UART0 TX) |
-| GPIO 13 | (UART0 RX, unused) |
+| GPIO 13 | CRSF TX (UART0 RX) |
 | GPIO 14 | External PWM input ch0 |
 | GPIO 15 | External PWM input ch1 |
 | GPIO 16 | WS2812 LED |
