@@ -52,15 +52,31 @@ cargo build --profile debug-release --target thumbv6m-none-eabihf --features rp2
 
 ## Configuration
 
+### Build-time environment variables
+
+The following variables are read when building the firmware and baked into the
+image at compile time:
+
+| Variable | Unit | Default | Description |
+|----------|------|---------|-------------|
+| `CRSF2PWM_MOTOR_SOFT_START_DELAY` | ms | 1000 | Time to ramp motors up from min to max |
+| `CRSF2PWM_MOTOR_SOFT_STOP_DELAY` | ms | 1000 | Time to ramp motors down from max to min |
+| `CRSF2PWM_FILTER_CUT_FREQ` | Hz | 5 | Low-pass filter cutoff frequency |
+
+```bash
+CRSF2PWM_MOTOR_SOFT_START_DELAY=5000 CRSF2PWM_MOTOR_SOFT_STOP_DELAY=500 make build
+```
+
+The effective values are logged at startup over defmt/RTT.
+
+### Other constants
+
 Values in `src/main.rs`:
 
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `RX_LOSS_TIMEOUT` | 100 ms | RX signal lost threshold |
-| `FILTER_CUT_FREQ` | 5 Hz | Filter cutoff |
 | `FILTER_SAMPLE_DEFAULT_FREQ` | 50 Hz | Filter sample rate default |
-| `MOTOR_SOFT_START_DELAY` | 1000 ms | Soft start delay for motors (first 2 channels) |
-| `MOTOR_SOFT_STOP_DELAY` | 1000 ms | Soft stop delay for motors (first 2 channels) |
 
 ## License
 
