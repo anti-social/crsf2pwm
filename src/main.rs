@@ -69,26 +69,34 @@ const EXT_PWM_MAX_CENTRAL_VALUE: u16 = 1510;
 const FILTER_SAMPLE_MIN_FREQ: u16 = 25;
 const FILTER_SAMPLE_MAX_FREQ: u16 = 250;
 const FILTER_SAMPLE_DEFAULT_FREQ: u16 = 50;
-const FILTER_CUT_FREQ: u16 = 5;
+// Low-pass filter cutoff is configured at build time via the
+// CRSF2PWM_FILTER_CUT_FREQ environment variable (hertz); see build.rs.
+const FILTER_CUT_FREQ: u16 = parse_u16(env!("CRSF2PWM_FILTER_CUT_FREQ"));
 
 // Motor soft start/stop delays are configured at build time via the
 // CRSF2PWM_MOTOR_SOFT_START_DELAY / CRSF2PWM_MOTOR_SOFT_STOP_DELAY
 // environment variables (milliseconds); see build.rs.
-const MOTOR_SOFT_START_DELAY: Duration = Duration::from_millis(parse_millis(env!("CRSF2PWM_MOTOR_SOFT_START_DELAY")));
-const MOTOR_SOFT_STOP_DELAY: Duration = Duration::from_millis(parse_millis(env!("CRSF2PWM_MOTOR_SOFT_STOP_DELAY")));
+const MOTOR_SOFT_START_DELAY: Duration = Duration::from_millis(parse_u64(env!("CRSF2PWM_MOTOR_SOFT_START_DELAY")));
+const MOTOR_SOFT_STOP_DELAY: Duration = Duration::from_millis(parse_u64(env!("CRSF2PWM_MOTOR_SOFT_STOP_DELAY")));
 
-const fn parse_millis(value: &str) -> u64 {
+const fn parse_u64(value: &str) -> u64 {
     let bytes = value.as_bytes();
-    assert!(!bytes.is_empty(), "delay must not be empty");
+    assert!(!bytes.is_empty(), "configuration value must not be empty");
     let mut result = 0;
     let mut i = 0;
     while i < bytes.len() {
         let digit = bytes[i];
-        assert!(digit.is_ascii_digit(), "delay must be a number of milliseconds");
+        assert!(digit.is_ascii_digit(), "configuration value must be a number");
         result = result * 10 + (digit - b'0') as u64;
         i += 1;
     }
     result
+}
+
+const fn parse_u16(value: &str) -> u16 {
+    let value = parse_u64(value);
+    assert!(value <= u16::MAX as u64, "configuration value must fit into u16");
+    value as u16
 }
 
 fn is_ext_pwm_active(reading: &(u16, Instant)) -> bool {
@@ -145,6 +153,7 @@ async fn main(spawner: Spawner) {
         MOTOR_SOFT_START_DELAY.as_millis(),
         MOTOR_SOFT_STOP_DELAY.as_millis(),
     );
+    defmt::info!("Filter cut frequency: {} Hz", FILTER_CUT_FREQ);
 
     let mut watchdog = Watchdog::new(p.WATCHDOG);
     watchdog.start(Duration::from_millis(1000));
