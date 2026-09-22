@@ -71,8 +71,25 @@ const FILTER_SAMPLE_MAX_FREQ: u16 = 250;
 const FILTER_SAMPLE_DEFAULT_FREQ: u16 = 50;
 const FILTER_CUT_FREQ: u16 = 5;
 
-const MOTOR_SOFT_START_DELAY: Duration = Duration::from_millis(1000);
-const MOTOR_SOFT_STOP_DELAY: Duration = Duration::from_millis(1000);
+// Motor soft start/stop delays are configured at build time via the
+// CRSF2PWM_MOTOR_SOFT_START_DELAY / CRSF2PWM_MOTOR_SOFT_STOP_DELAY
+// environment variables (milliseconds); see build.rs.
+const MOTOR_SOFT_START_DELAY: Duration = Duration::from_millis(parse_millis(env!("CRSF2PWM_MOTOR_SOFT_START_DELAY")));
+const MOTOR_SOFT_STOP_DELAY: Duration = Duration::from_millis(parse_millis(env!("CRSF2PWM_MOTOR_SOFT_STOP_DELAY")));
+
+const fn parse_millis(value: &str) -> u64 {
+    let bytes = value.as_bytes();
+    assert!(!bytes.is_empty(), "delay must not be empty");
+    let mut result = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let digit = bytes[i];
+        assert!(digit.is_ascii_digit(), "delay must be a number of milliseconds");
+        result = result * 10 + (digit - b'0') as u64;
+        i += 1;
+    }
+    result
+}
 
 fn is_ext_pwm_active(reading: &(u16, Instant)) -> bool {
     let (v, t) = reading;
@@ -123,6 +140,11 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     defmt::info!("Starting crsf to pwm converter...");
+    defmt::info!(
+        "Motor soft start delay: {} ms, soft stop delay: {} ms",
+        MOTOR_SOFT_START_DELAY.as_millis(),
+        MOTOR_SOFT_STOP_DELAY.as_millis(),
+    );
 
     let mut watchdog = Watchdog::new(p.WATCHDOG);
     watchdog.start(Duration::from_millis(1000));

@@ -12,6 +12,14 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+/// Build-time configuration: `(environment variable, default value in
+/// milliseconds)`. The variables are exposed to the crate under their own
+/// name via `env!`.
+const CONFIG_VARS: [(&str, u64); 2] = [
+    ("CRSF2PWM_MOTOR_SOFT_START_DELAY", 1_000),
+    ("CRSF2PWM_MOTOR_SOFT_STOP_DELAY", 1_000),
+];
+
 fn main() {
     let memory_filename = if env::var("CARGO_FEATURE_RP2350").is_ok() {
         "memory-rp2350.x"
@@ -31,6 +39,20 @@ fn main() {
     // `memory.x` is changed.
     println!("cargo:rerun-if-changed=memory-rp2040.x");
     println!("cargo:rerun-if-changed=memory-rp2350.x");
+
+    for (env_name, default_millis) in CONFIG_VARS {
+        // Re-read the variable (and rebuild the crate) when it changes.
+        println!("cargo:rerun-if-env-changed={env_name}");
+        let value = match env::var(env_name) {
+            Err(_) => default_millis,
+            Ok(raw) => match raw.parse::<u64>() {
+                Ok(v) if v > 0 => v,
+                Ok(_) => panic!("{env_name}={raw:?}: delay must be greater than 0 milliseconds"),
+                Err(_) => panic!("{env_name}={raw:?}: expected a number of milliseconds"),
+            },
+        };
+        println!("cargo:rustc-env={env_name}={value}");
+    }
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");

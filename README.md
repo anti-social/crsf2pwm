@@ -52,6 +52,25 @@ cargo build --profile debug-release --target thumbv6m-none-eabihf --features rp2
 
 ## Configuration
 
+### Motor soft start/stop delays
+
+The delays for the motor channels (first 2 channels) are set via environment
+variables (values in milliseconds) when building the firmware; they are baked
+into the image at compile time.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CRSF2PWM_MOTOR_SOFT_START_DELAY` | 1000 | Time to ramp motors up from min to max |
+| `CRSF2PWM_MOTOR_SOFT_STOP_DELAY` | 1000 | Time to ramp motors down from max to min |
+
+```bash
+CRSF2PWM_MOTOR_SOFT_START_DELAY=5000 CRSF2PWM_MOTOR_SOFT_STOP_DELAY=500 make build
+```
+
+The effective values are logged at startup over defmt/RTT.
+
+### Other constants
+
 Values in `src/main.rs`:
 
 | Constant | Default | Description |
@@ -59,8 +78,6 @@ Values in `src/main.rs`:
 | `RX_LOSS_TIMEOUT` | 100 ms | RX signal lost threshold |
 | `FILTER_CUT_FREQ` | 5 Hz | Filter cutoff |
 | `FILTER_SAMPLE_DEFAULT_FREQ` | 50 Hz | Filter sample rate default |
-| `MOTOR_SOFT_START_DELAY` | 1000 ms | Soft start delay for motors (first 2 channels) |
-| `MOTOR_SOFT_STOP_DELAY` | 1000 ms | Soft stop delay for motors (first 2 channels) |
 
 ## License
 
